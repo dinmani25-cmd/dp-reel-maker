@@ -267,19 +267,23 @@ function redraw(){if(!S.cats.length)$('thumbs').textContent='No cat photos loade
 /* ---------- voices ---------- */
 const hasWebTTS=!!(window.speechSynthesis&&window.SpeechSynthesisUtterance);
 const nativeTTS=()=>(isNative()&&window.Capacitor.Plugins&&window.Capacitor.Plugins.TextToSpeech)||null;
-const ttsAvailable=()=>!!(nativeTTS()||hasWebTTS);
+const nativeFile=()=>(isNative()&&window.Capacitor.Plugins&&window.Capacitor.Plugins.TtsFile)||null;
+const ttsAvailable=()=>!!(nativeFile()||nativeTTS()||hasWebTTS);
 async function loadVoices(){
   const list=[['English (India)','en-IN'],['Hindi','hi-IN'],['English (US)','en-US']].map(([l,c])=>({label:'Automatic: '+l,lang:c}));
   try{
-    const n=nativeTTS();
-    if(n){const r=await n.getSupportedVoices();(r.voices||[]).forEach((v,k)=>list.push({label:v.name+' ('+v.lang+')',lang:v.lang,idx:k}))}
+    const nf=nativeFile(),n=nativeTTS();
+    if(nf){
+      const r=await nf.getVoices(),vs=(r.voices||[]).filter(v=>/^(en|hi)/i.test(v.lang)).sort((a,b)=>(/-IN$/i.test(b.lang)?1:0)-(/-IN$/i.test(a.lang)?1:0));
+      vs.forEach(v=>list.push({label:v.name+' ('+v.lang+')',lang:v.lang,name:v.name}));
+    }else if(n){const r=await n.getSupportedVoices();(r.voices||[]).forEach((v,k)=>list.push({label:v.name+' ('+v.lang+')',lang:v.lang,idx:k}))}
     else if(hasWebTTS){speechSynthesis.getVoices().forEach(v=>list.push({label:v.name+' ('+v.lang+')',lang:v.lang,web:v}))}
   }catch(e){}
   const cur=$('voice').value;S.voices=list;
   $('voice').innerHTML=list.map((x,k)=>`<option value="${k}">${x.label}</option>`).join('');
   if(cur&&list[+cur])$('voice').value=cur;
 }
-loadVoices();setTimeout(loadVoices,1500);
+loadVoices();setTimeout(loadVoices,1500);setTimeout(loadVoices,4000);
 if(hasWebTTS)speechSynthesis.onvoiceschanged=loadVoices;
 function modeUI(){
   const m=$('vmode').value;
@@ -294,9 +298,39 @@ async function play(o={}){
   const list=scenes();if(!list.length)return;
   let mode=o.silent?'none':$('vmode').value;const dur=Math.max(1.5,+$('dur').value||3);
   if(mode==='tts'&&!ttsAvailable()){mode='none';$('status').textContent='No computer voice found on this device, so this plays without sound. Use “My own voice” or upload a voice file.'}
-  const est=list.map(s=>mode==='tts'?Math.max(2,s.split(/\s+/).length*.42):dur);
+  let est=list.map(s=>mode==='tts'?Math.max(2,s.split(/\s+/).length*.42):dur);
   let i=0,t0=performance.now(),g0=t0,fin=false,ttsEnd=0,speaking=false,pulse=0,an,buf,ael,mel,ctx=o.ctx;
   S.playing=true;S.amp=0;
+  let abufs=null,cur=null;
+  if(mode==='tts'&&nativeFile()){
+    S.playing=false;
+    if(S.preparing){return}
+    S.preparing=true;
+    try{
+      ctx=ctx||S.actx||(S.actx=new AudioContext());await ctx.resume();
+      const v=S.voices[$('voice').value]||S.voices[0]||{lang:'en-IN'};abufs=[];
+      for(let k=0;k<list.length;k++){
+        $('status').textContent='Preparing voice… '+(k+1)+' of '+list.length;
+        const r=await nativeFile().synthesize({text:list[k],lang:v.lang,voiceName:v.name||'',rate:1});
+        const ab=Uint8Array.from(atob(r.data),c=>c.charCodeAt(0)).buffer;
+        abufs.push(await ctx.decodeAudioData(ab));
+      }
+      mode='ttsfile';est=abufs.map(b=>Math.max(1.8,b.duration+.45));
+      $('status').textContent=o.ctx?'Recording…':'Playing preview…';
+    }catch(e){
+      abufs=null;$('status').textContent='Couldn’t prepare the clean voice ('+((e&&e.message)||e)+'). Using the basic voice instead.';
+    }finally{S.preparing=false}
+    S.playing=true;
+  }
+  if(mode==='ttsfile'){
+    an=ctx.createAnalyser();an.fftSize=512;buf=new Uint8Array(an.fftSize);
+    if(o.dest)an.connect(o.dest);else an.connect(ctx.destination);
+  }
+  const startBuf=k=>{
+    if(!abufs)return;
+    try{if(cur)cur.stop()}catch(e){}
+    cur=ctx.createBufferSource();cur.buffer=abufs[k];cur.connect(an);cur.start();
+  };
   const speak=txt=>{
     const v=S.voices[$('voice').value]||S.voices[0]||{lang:'en-IN'},n=nativeTTS();
     speaking=true;ttsEnd=0;
@@ -313,7 +347,7 @@ async function play(o={}){
   };
   if(mode==='mic'&&S.voiceUrl&&!o.recordVoice){
     try{
-      ctx=ctx||new AudioContext();await ctx.resume();
+      ctx=ctx||S.actx||(S.actx=new AudioContext());await ctx.resume();
       ael=new Audio(S.voiceUrl);const src=ctx.createMediaElementSource(ael);
       an=ctx.createAnalyser();an.fftSize=512;buf=new Uint8Array(an.fftSize);src.connect(an);
       if(o.dest)src.connect(o.dest);else an.connect(ctx.destination);
@@ -324,6 +358,7 @@ async function play(o={}){
   const finish=()=>{
     if(fin)return;fin=true;S.playing=false;S.stop=null;cancelAnimationFrame(S.raf);
     try{const n=nativeTTS();if(n)n.stop().catch(()=>{});else if(hasWebTTS)speechSynthesis.cancel()}catch(e){}
+    try{if(cur)cur.stop()}catch(e){}
     if(ael)ael.pause();if(mel)mel.pause();
     draw(list.length-1,est[est.length-1],est[est.length-1],(performance.now()-g0)/1000,list,0);
     if(o.onEnd)setTimeout(o.onEnd,400);
@@ -331,7 +366,7 @@ async function play(o={}){
   S.stop=()=>{if(o.onAbort)o.onAbort();finish()};
   t0=g0=performance.now();
   if(ael)ael.play().catch(()=>{});
-  try{if(mode==='tts')speak(list[0])}catch(e){$('status').textContent='Voice problem: '+e.message}
+  try{if(mode==='ttsfile')startBuf(0);else if(mode==='tts')speak(list[0])}catch(e){$('status').textContent='Voice problem: '+e.message}
   const tick0=now=>{
     if(fin)return;
     const el=(now-t0)/1000,t=(now-g0)/1000;let target=0;
@@ -339,7 +374,7 @@ async function play(o={}){
     else if(an){an.getByteTimeDomainData(buf);let s=0;for(const v of buf){const d=(v-128)/128;s+=d*d}target=Math.min(1,Math.sqrt(s/buf.length)*5)}
     S.amp+=(target-S.amp)*.6;
     const adv=mode==='tts'?((ttsEnd&&now-ttsEnd>350&&el>1.2)||el>est[i]*2+2):el>=est[i];
-    if(adv){i++;if(i>=list.length){finish();return}t0=now;ttsEnd=0;if(mode==='tts')speak(list[i])}
+    if(adv){i++;if(i>=list.length){finish();return}t0=now;ttsEnd=0;if(mode==='ttsfile')startBuf(i);else if(mode==='tts')speak(list[i])}
     draw(i,(now-t0)/1000,est[i],t,list,S.amp);
     S.raf=requestAnimationFrame(tick);
   };
@@ -396,7 +431,7 @@ $('rec').onclick=async()=>{
   btn.disabled=true;
   try{
     const stream=cv.captureStream(30),mf=$('music').files[0];let ctx,dest;
-    if(mode==='tts'){
+    if(mode==='tts'&&!nativeFile()){
       const md=navigator.mediaDevices;
       if(md&&md.getDisplayMedia){
         st.textContent='In the popup choose “This tab” and tick “Share tab audio”, so the voice gets recorded.';
@@ -410,9 +445,9 @@ $('rec').onclick=async()=>{
         const ms=await md.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
         ms.getAudioTracks().forEach(t=>stream.addTrack(t));
       }else throw new Error('This page can’t use the microphone. Host it on GitHub Pages (https) and try again.');
-    }else if(mode==='mic'||mf){
+    }else if(mode==='mic'||mode==='tts'||mf){
       ctx=new AudioContext();await ctx.resume();dest=ctx.createMediaStreamDestination();
-      if(mf){const me=new Audio(URL.createObjectURL(mf));me.loop=true;const s=ctx.createMediaElementSource(me),gn=ctx.createGain();gn.gain.value=mode==='mic'?.25:.6;s.connect(gn);gn.connect(dest);me.play().catch(()=>{});S.me=me}
+      if(mf){const me=new Audio(URL.createObjectURL(mf));me.loop=true;const s=ctx.createMediaElementSource(me),gn=ctx.createGain();gn.gain.value=mode!=='none'?.25:.6;s.connect(gn);gn.connect(dest);me.play().catch(()=>{});S.me=me}
       dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
     }
     const types=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1.4D401F,mp4a.40.2','video/mp4;codecs=avc1.640028,mp4a.40.2','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
