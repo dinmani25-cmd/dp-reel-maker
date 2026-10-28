@@ -49,7 +49,7 @@ input[type=range]{width:100%}
 <main>
 <section>
 <h1>Reel Maker</h1>
-<p class="sub">Turn a script into a vertical reel with a talking cat. Everything runs in your browser.</p>
+<p class="sub">Turn a script into a vertical reel with a talking cat. Everything runs on your device.</p>
 <label for="sceneText">Script (one scene per line)</label>
 <textarea id="sceneText">Stop scrolling. This takes 10 seconds.
 Write tomorrow’s top 3 tasks before you sleep.
@@ -265,13 +265,22 @@ function draw(i,el,est,t,list,amp){
 function redraw(){if(!S.cats.length)$('thumbs').textContent='No cat photos loaded yet. Use “Add more cat photos” below.';if(!S.playing)draw(0,.9,3,.9,scenes().length?scenes():[' '],0)}
 
 /* ---------- voices ---------- */
-function loadVoices(){
-  if(!window.speechSynthesis)return;
-  const v=speechSynthesis.getVoices().slice().sort((a,b)=>(/-IN$/.test(b.lang)?1:0)-(/-IN$/.test(a.lang)?1:0));
-  if(!v.length)return;S.voices=v;
-  $('voice').innerHTML=v.map((x,k)=>`<option value="${k}">${x.name} (${x.lang})</option>`).join('');
+const hasWebTTS=!!(window.speechSynthesis&&window.SpeechSynthesisUtterance);
+const nativeTTS=()=>(isNative()&&window.Capacitor.Plugins&&window.Capacitor.Plugins.TextToSpeech)||null;
+const ttsAvailable=()=>!!(nativeTTS()||hasWebTTS);
+async function loadVoices(){
+  const list=[['English (India)','en-IN'],['Hindi','hi-IN'],['English (US)','en-US']].map(([l,c])=>({label:'Automatic: '+l,lang:c}));
+  try{
+    const n=nativeTTS();
+    if(n){const r=await n.getSupportedVoices();(r.voices||[]).forEach((v,k)=>list.push({label:v.name+' ('+v.lang+')',lang:v.lang,idx:k}))}
+    else if(hasWebTTS){speechSynthesis.getVoices().forEach(v=>list.push({label:v.name+' ('+v.lang+')',lang:v.lang,web:v}))}
+  }catch(e){}
+  const cur=$('voice').value;S.voices=list;
+  $('voice').innerHTML=list.map((x,k)=>`<option value="${k}">${x.label}</option>`).join('');
+  if(cur&&list[+cur])$('voice').value=cur;
 }
-if(window.speechSynthesis){loadVoices();speechSynthesis.onvoiceschanged=loadVoices}
+loadVoices();setTimeout(loadVoices,1500);
+if(hasWebTTS)speechSynthesis.onvoiceschanged=loadVoices;
 function modeUI(){
   const m=$('vmode').value;
   $('voicewrap').hidden=m!=='tts';$('recvoice').hidden=m!=='mic';$('voicefilewrap').hidden=m!=='mic';
@@ -283,29 +292,38 @@ $('vmode').onchange=modeUI;modeUI();
 async function play(o={}){
   if(S.stop)S.stop();
   const list=scenes();if(!list.length)return;
-  const mode=o.silent?'none':$('vmode').value,dur=Math.max(1.5,+$('dur').value||3);
+  let mode=o.silent?'none':$('vmode').value;const dur=Math.max(1.5,+$('dur').value||3);
+  if(mode==='tts'&&!ttsAvailable()){mode='none';$('status').textContent='No computer voice found on this device, so this plays without sound. Use “My own voice” or upload a voice file.'}
   const est=list.map(s=>mode==='tts'?Math.max(2,s.split(/\s+/).length*.42):dur);
   let i=0,t0=performance.now(),g0=t0,fin=false,ttsEnd=0,speaking=false,pulse=0,an,buf,ael,mel,ctx=o.ctx;
   S.playing=true;S.amp=0;
   const speak=txt=>{
-    const u=new SpeechSynthesisUtterance(txt),v=S.voices[$('voice').value];
-    if(v){u.voice=v;u.lang=v.lang}u.rate=1.02;
-    u.onstart=()=>{speaking=true;ttsEnd=0};
-    u.onboundary=()=>{pulse=1};
-    u.onend=u.onerror=()=>{speaking=false;ttsEnd=performance.now()};
-    speaking=true;ttsEnd=0;speechSynthesis.cancel();speechSynthesis.speak(u);
+    const v=S.voices[$('voice').value]||S.voices[0]||{lang:'en-IN'},n=nativeTTS();
+    speaking=true;ttsEnd=0;
+    const done=()=>{speaking=false;ttsEnd=performance.now()};
+    const fail=e=>{$('status').textContent='Voice problem: '+((e&&e.message)||e||'unknown');done()};
+    if(n){
+      const q={text:txt,lang:v.lang,rate:1,pitch:1,volume:1};if(v.idx!=null)q.voice=v.idx;
+      n.speak(q).then(done,fail);
+    }else{
+      const u=new SpeechSynthesisUtterance(txt);if(v.web)u.voice=v.web;u.lang=v.lang;u.rate=1.02;
+      u.onstart=()=>{speaking=true;ttsEnd=0};u.onboundary=()=>{pulse=1};u.onend=done;u.onerror=done;
+      speechSynthesis.cancel();speechSynthesis.speak(u);
+    }
   };
   if(mode==='mic'&&S.voiceUrl&&!o.recordVoice){
-    ctx=ctx||new AudioContext();await ctx.resume();
-    ael=new Audio(S.voiceUrl);const src=ctx.createMediaElementSource(ael);
-    an=ctx.createAnalyser();an.fftSize=512;buf=new Uint8Array(an.fftSize);src.connect(an);
-    if(o.dest)src.connect(o.dest);else an.connect(ctx.destination);
+    try{
+      ctx=ctx||new AudioContext();await ctx.resume();
+      ael=new Audio(S.voiceUrl);const src=ctx.createMediaElementSource(ael);
+      an=ctx.createAnalyser();an.fftSize=512;buf=new Uint8Array(an.fftSize);src.connect(an);
+      if(o.dest)src.connect(o.dest);else an.connect(ctx.destination);
+    }catch(e){ael=null;an=null;$('status').textContent='Couldn’t play the voice file: '+e.message}
   }
   const mf=$('music').files[0];
   if(mf&&!o.ctx){mel=new Audio(URL.createObjectURL(mf));mel.loop=true;mel.volume=.35;mel.play().catch(()=>{})}
   const finish=()=>{
     if(fin)return;fin=true;S.playing=false;S.stop=null;cancelAnimationFrame(S.raf);
-    if(window.speechSynthesis)speechSynthesis.cancel();
+    try{const n=nativeTTS();if(n)n.stop().catch(()=>{});else if(hasWebTTS)speechSynthesis.cancel()}catch(e){}
     if(ael)ael.pause();if(mel)mel.pause();
     draw(list.length-1,est[est.length-1],est[est.length-1],(performance.now()-g0)/1000,list,0);
     if(o.onEnd)setTimeout(o.onEnd,400);
@@ -313,8 +331,8 @@ async function play(o={}){
   S.stop=()=>{if(o.onAbort)o.onAbort();finish()};
   t0=g0=performance.now();
   if(ael)ael.play().catch(()=>{});
-  if(mode==='tts')speak(list[0]);
-  const tick=now=>{
+  try{if(mode==='tts')speak(list[0])}catch(e){$('status').textContent='Voice problem: '+e.message}
+  const tick0=now=>{
     if(fin)return;
     const el=(now-t0)/1000,t=(now-g0)/1000;let target=0;
     if(mode==='tts'){pulse=Math.max(0,pulse-.05);const wv=.6+.4*Math.abs(Math.sin(Math.floor(t*3.7)*12.9898));target=speaking?(.12+.88*Math.abs(Math.sin(t*14)))*wv*(.8+.2*pulse):0}
@@ -325,6 +343,7 @@ async function play(o={}){
     draw(i,(now-t0)/1000,est[i],t,list,S.amp);
     S.raf=requestAnimationFrame(tick);
   };
+  const tick=now=>{try{tick0(now)}catch(e){$('status').textContent='Preview problem: '+e.message;finish()}};
   S.raf=requestAnimationFrame(tick);
 }
 
@@ -333,7 +352,7 @@ $('play').onclick=()=>{$('out').innerHTML='';$('status').textContent='Playing pr
 /* ---------- record my voice ---------- */
 $('recvoice').onclick=async()=>{
   const st=$('status'),btn=$('recvoice');
-  if(!navigator.mediaDevices||!window.MediaRecorder){st.textContent='Microphone recording isn’t available in this browser.';return}
+  if(!navigator.mediaDevices||!window.MediaRecorder){st.textContent='Microphone recording isn’t available here.';return}
   let ms;
   try{ms=await navigator.mediaDevices.getUserMedia({audio:true})}
   catch(e){st.textContent='Microphone blocked. Allow it in the address bar, then try again.';return}
@@ -371,9 +390,9 @@ window.addEventListener('error',e=>{$('status').textContent='Error: '+e.message}
 $('rec').onclick=async()=>{
   const st=$('status'),btn=$('rec'),out=$('out'),mode=$('vmode').value;
   out.innerHTML='';
-  if(!window.MediaRecorder||!cv.captureStream){st.textContent='This browser can’t export video. Open the app in Chrome or Edge.';return}
+  if(!window.MediaRecorder||!cv.captureStream){st.textContent=isNative()?'Video export isn’t available on this device. Update “Android System WebView” and “Google Chrome” in the Play Store, then try again.':'This browser can’t export video. Open the app in Chrome or Edge.';return}
   if(mode==='mic'&&!S.voiceUrl){st.textContent='Record your voice first, then export.';return}
-  if(mode==='tts'&&!window.speechSynthesis){st.textContent='This browser has no computer voice. Pick “My own voice” or “No voice”.';return}
+  if(mode==='tts'&&!ttsAvailable()){st.textContent='No computer voice found on this device. Turn on Google Text-to-Speech in Android Settings, or pick “My own voice”.';return}
   btn.disabled=true;
   try{
     const stream=cv.captureStream(30),mf=$('music').files[0];let ctx,dest;
@@ -399,7 +418,7 @@ $('rec').onclick=async()=>{
     const types=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1.4D401F,mp4a.40.2','video/mp4;codecs=avc1.640028,mp4a.40.2','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
     const mime=types.find(t=>MediaRecorder.isTypeSupported(t))||'';
     const isMp4=mime.includes('mp4');
-    st.textContent=(isMp4?'Recording as H.264 MP4, ready for Instagram. ':'This browser can’t make Instagram-ready MP4, so this will be WebM. ')+'Keep this tab open and visible.';
+    st.textContent=(isMp4?'Recording as H.264 MP4, ready for Instagram. ':(isNative()?'This device can’t make Instagram-ready MP4, so this will be WebM. ':'This browser can’t make Instagram-ready MP4, so this will be WebM. '))+(isNative()?'Keep the app open on this screen.':'Keep this tab open and visible.');
     const rec=mime?new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:6e6,audioBitsPerSecond:128e3}):new MediaRecorder(stream),chunks=[];
     rec.ondataavailable=e=>e.data&&e.data.size&&chunks.push(e.data);
     rec.onerror=e=>{st.textContent='Recording failed: '+(e.error&&e.error.message||'unknown error');btn.disabled=false};
@@ -424,7 +443,7 @@ $('rec').onclick=async()=>{
   }
 };
 
-['sceneText','theme','anim','handle'].forEach(id=>$(id).addEventListener('input',redraw));
+['sceneText','theme','anim','handle'].forEach(id=>['input','change','keyup'].forEach(ev=>$(id).addEventListener(ev,()=>{if(S.playing&&!S.raf)S.playing=false;redraw()})));
 redraw();
 if('serviceWorker'in navigator&&!isNative())navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script></body></html>
