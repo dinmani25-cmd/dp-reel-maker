@@ -43,6 +43,10 @@ dialog h2{margin:0 0 12px;font-size:20px}
 .seg button{flex:1;padding:10px;background:#fff;color:var(--ink);border:2px solid var(--line)}
 .seg button[aria-pressed=true]{border-color:var(--saffron);background:#FFF1E0}
 input[type=range]{width:100%}
+details.chkl{margin-top:14px;font-size:14px}
+details.chkl summary{cursor:pointer;font-weight:700}
+details.chkl ol{margin:8px 0 0;padding-left:20px}
+label.chk{display:flex;gap:8px;align-items:center;font-weight:600;margin-top:10px}
 [hidden]{display:none!important}
 @media(max-width:820px){main{grid-template-columns:1fr}.phone{position:static;max-width:360px;margin:0 auto}}
 </style></head><body>
@@ -73,7 +77,24 @@ Save this for tonight. Follow for more life tips.</textarea>
 <div id="voicewrap"><label for="voice">Voice</label><select id="voice"></select></div>
 </div>
 <div class="hint" id="vhint"></div>
-<div id="voicefilewrap" hidden><label for="voicefile">Or upload a voice-over audio file</label><input id="voicefile" type="file" accept="audio/*"></div>
+<div id="animalwrap"><label for="animal">Animal voice (every word stays clear)</label><select id="animal">
+<option value="">Normal voice</option>
+<optgroup label="Animals: clear speech plus an animal sound">
+<option value="kitten">🐱 Kitten, squeaky + meow</option>
+<option value="cat">😺 Cat, smooth + meow</option>
+<option value="dog">🐶 Dog, gruff + woof</option>
+<option value="mouse">🐭 Mouse, tiny + squeak</option>
+<option value="duck">🦆 Duck, nasal + quack</option>
+<option value="cow">🐮 Cow, deep + moo</option>
+<option value="lion">🦁 Lion, growly + roar</option>
+<option value="frog">🐸 Frog, croaky + ribbit</option></optgroup>
+<optgroup label="Extras">
+<option value="robot">🤖 Robot cat</option>
+<option value="echo">👻 Haunted cat, echo</option>
+<option value="meow">😻 Meow talk (meows only, no words)</option></optgroup></select>
+<div class="hint" id="animalhint"></div></div>
+<div id="voicefilewrap" hidden><label for="voicefile">Or upload a voice-over audio file</label><input id="voicefile" type="file" accept="audio/*">
+<label class="chk"><input type="checkbox" id="denoise" checked> Remove background noise from my voice</label></div>
 
 <div class="row">
 <div><label for="theme">Look</label><select id="theme">
@@ -93,6 +114,15 @@ Save this for tonight. Follow for more life tips.</textarea>
 <button class="rec" id="rec">Export video</button>
 </div>
 <div id="status" role="status"></div>
+<details class="chkl"><summary>Clean audio checklist (voice only, no background noise)</summary>
+<ol>
+<li>Voice-over is <b>Computer voice</b>. When you press Preview, you should see “Preparing voice… 1 of N”. That means the clean voice is on.</li>
+<li><b>Background music</b> must say “No file chosen”.</li>
+<li>Don’t use a screen recorder or any other app’s recording.</li>
+<li>If the status says “Recording the voice through the microphone”, you’re on an old app. Install the newest APK.</li>
+<li>Own voice: keep “Remove background noise” ticked, record in a quiet room, mouth 10 to 15 cm from the mic.</li>
+<li>When you post on Instagram, choose <b>Original audio</b> and don’t add music.</li>
+</ol></details>
 <div id="out"></div>
 </section>
 <aside class="phone"><canvas id="cv" width="720" height="1280"></canvas></aside>
@@ -269,6 +299,95 @@ const hasWebTTS=!!(window.speechSynthesis&&window.SpeechSynthesisUtterance);
 const nativeTTS=()=>(isNative()&&window.Capacitor.Plugins&&window.Capacitor.Plugins.TextToSpeech)||null;
 const nativeFile=()=>(isNative()&&window.Capacitor.Plugins&&window.Capacitor.Plugins.TtsFile)||null;
 const ttsAvailable=()=>!!(nativeFile()||nativeTTS()||hasWebTTS);
+const cleanVoice=()=>!!(nativeFile()||$('animal').value==='meow');
+
+/* ---------- funny cat voices ---------- */
+async function meowBuffer(text){
+  const sr=44100,words=text.split(/\s+/).filter(Boolean);let t=.15;
+  const plan=words.map(w=>{
+    const len=Math.min(.62,.3+w.length*.035),seed=[...w].reduce((a,c)=>(a*31+c.charCodeAt(0))>>>0,7);
+    const p={st:t,len,f0:330+(seed%5)*55+(/\?/.test(w)?70:0)};t+=len+.09;return p;
+  });
+  const oc=new OfflineAudioContext(1,Math.ceil((t+.4)*sr),sr),master=oc.createGain();master.gain.value=.8;master.connect(oc.destination);
+  plan.forEach(p=>{
+    const o=oc.createOscillator();o.type='sawtooth';
+    o.frequency.setValueAtTime(p.f0*.8,p.st);o.frequency.linearRampToValueAtTime(p.f0*1.45,p.st+p.len*.3);o.frequency.linearRampToValueAtTime(p.f0*.7,p.st+p.len);
+    const vib=oc.createOscillator(),vg=oc.createGain();vib.frequency.value=7;vg.gain.value=9;vib.connect(vg);vg.connect(o.frequency);
+    const f1=oc.createBiquadFilter(),f2=oc.createBiquadFilter(),g2=oc.createGain(),g=oc.createGain();
+    f1.type=f2.type='bandpass';f1.Q.value=4;f2.Q.value=5;g2.gain.value=.55;
+    f1.frequency.setValueAtTime(500,p.st);f1.frequency.linearRampToValueAtTime(1000,p.st+p.len*.35);f1.frequency.linearRampToValueAtTime(600,p.st+p.len);
+    f2.frequency.setValueAtTime(1800,p.st);f2.frequency.linearRampToValueAtTime(2500,p.st+p.len*.35);f2.frequency.linearRampToValueAtTime(1500,p.st+p.len);
+    g.gain.setValueAtTime(0,p.st);g.gain.linearRampToValueAtTime(1,p.st+.04);g.gain.setValueAtTime(1,p.st+p.len*.6);g.gain.linearRampToValueAtTime(0,p.st+p.len);
+    o.connect(f1);o.connect(f2);f1.connect(g);f2.connect(g2);g2.connect(g);g.connect(master);
+    o.start(p.st);o.stop(p.st+p.len+.05);vib.start(p.st);vib.stop(p.st+p.len+.05);
+  });
+  return oc.startRendering();
+}
+const AN={
+  kitten:{rate:1.4,hp:300,peak:[2800,6,8],tail:'meow',tp:1.5},
+  cat:{rate:1.15,peak:[2200,5,6],tail:'meow',tp:1},
+  dog:{rate:.92,drive:7,lp:3500,peak:[500,6,8],tail:'woof'},
+  mouse:{rate:1.55,hp:400,peak:[3500,4,5],tail:'squeak'},
+  duck:{rate:1.08,peak:[1400,9,12],tail:'quack'},
+  cow:{rate:.82,lp:2600,peak:[350,6,8],tail:'moo'},
+  lion:{rate:.76,drive:5,lp:3000,echo:1,peak:[250,5,8],tail:'roar'},
+  frog:{rate:.9,am:28,peak:[300,5,8],tail:'ribbit'},
+  robot:{rate:1,ring:55},
+  echo:{rate:1,echo:1}
+};
+function curve(k){const n=1024,c=new Float32Array(n);for(let i=0;i<n;i++){const x=i*2/n-1;c[i]=Math.tanh(x*k)/Math.tanh(k)}return c}
+function sound(oc,type,t0,pitch){
+  pitch=pitch||1;const out=oc.createGain();out.gain.value=.9;out.connect(oc.destination);
+  const note=(o,f1,f2,st,len,type2,bp,q,amHz,vol)=>{
+    o.type=type2;o.frequency.setValueAtTime(f1,st);o.frequency.linearRampToValueAtTime(f2,st+len*.5);o.frequency.linearRampToValueAtTime(f1*.8,st+len);
+    const f=oc.createBiquadFilter(),g=oc.createGain();f.type='bandpass';f.frequency.value=bp;f.Q.value=q;
+    g.gain.setValueAtTime(0,st);g.gain.linearRampToValueAtTime(vol,st+Math.min(.03,len/4));g.gain.setValueAtTime(vol,st+len*.7);g.gain.linearRampToValueAtTime(0,st+len);
+    if(amHz){const m=oc.createOscillator(),mg=oc.createGain();m.frequency.value=amHz;mg.gain.value=.5;m.connect(mg);mg.connect(g.gain);m.start(st);m.stop(st+len+.05)}
+    o.connect(f);f.connect(g);g.connect(out);o.start(st);o.stop(st+len+.05);
+  };
+  const mk=()=>oc.createOscillator();
+  if(type==='meow'){const o=mk();note(o,480*pitch,700*pitch,t0,.6,'sawtooth',1000,3,0,1);return .7}
+  if(type==='woof'){for(let k=0;k<2;k++)note(mk(),210,110,t0+k*.3,.18,'sawtooth',800,2,0,.8);return .6}
+  if(type==='quack'){for(let k=0;k<2;k++)note(mk(),400,300,t0+k*.28,.2,'square',1300,3,30,.9);return .6}
+  if(type==='moo'){note(mk(),130,100,t0,1,'sawtooth',500,3,5,.8);return 1.1}
+  if(type==='roar'){note(mk(),90,70,t0,1.1,'sawtooth',400,1.5,23,.55);return 1.2}
+  if(type==='ribbit'){for(let k=0;k<2;k++)note(mk(),190,150,t0+k*.17,.12,'square',650,3,45,1);return .5}
+  if(type==='squeak'){for(let k=0;k<2;k++)note(mk(),2300,3500,t0+k*.15,.1,'sine',3000,2,0,.8);return .4}
+  return 0;
+}
+async function applyFx(buf,fx){
+  const c=AN[fx];if(!c)return buf;
+  const sr=buf.sampleRate,speech=buf.duration/c.rate,tail=c.tail?1.3:0,extra=c.echo?1.2:0;
+  const oc=new OfflineAudioContext(1,Math.ceil((speech+tail+extra+.2)*sr),sr),src=oc.createBufferSource();
+  src.buffer=buf;src.playbackRate.value=c.rate;let node=src;
+  const chain=n=>{node.connect(n);node=n};
+  if(c.hp){const f=oc.createBiquadFilter();f.type='highpass';f.frequency.value=c.hp;chain(f)}
+  if(c.peak){const f=oc.createBiquadFilter();f.type='peaking';f.frequency.value=c.peak[0];f.Q.value=c.peak[1];f.gain.value=c.peak[2];chain(f)}
+  if(c.drive){const w=oc.createWaveShaper();w.curve=curve(c.drive);chain(w)}
+  if(c.lp){const f=oc.createBiquadFilter();f.type='lowpass';f.frequency.value=c.lp;chain(f)}
+  if(c.am){const m=oc.createGain(),o=oc.createOscillator(),og=oc.createGain();m.gain.value=.55;o.frequency.value=c.am;og.gain.value=.45;o.connect(og);og.connect(m.gain);o.start();chain(m)}
+  if(c.ring){const m=oc.createGain(),o=oc.createOscillator(),og=oc.createGain();m.gain.value=0;o.type='square';o.frequency.value=c.ring;og.gain.value=.9;o.connect(og);og.connect(m.gain);o.start();chain(m)}
+  if(c.echo){const d=oc.createDelay(1),fb=oc.createGain(),mix=oc.createGain();d.delayTime.value=.23;fb.gain.value=.45;d.connect(fb);fb.connect(d);node.connect(d);node.connect(mix);d.connect(mix);node=mix}
+  const lev=oc.createGain();lev.gain.value=c.drive?.38:.9;chain(lev);lev.connect(oc.destination);src.start();
+  if(c.tail)sound(oc,c.tail,speech+.12,c.tp);
+  return oc.startRendering();
+}
+async function denoiseBuffer(buf,ctx){
+  const sr=buf.sampleRate,oc=new OfflineAudioContext(1,buf.length,sr),s=oc.createBufferSource();s.buffer=buf;
+  const hp=oc.createBiquadFilter(),lp=oc.createBiquadFilter();hp.type='highpass';hp.frequency.value=100;lp.type='lowpass';lp.frequency.value=7500;
+  s.connect(hp);hp.connect(lp);lp.connect(oc.destination);s.start();
+  const d=(await oc.startRendering()).getChannelData(0).slice(),win=Math.round(sr*.02),n=Math.floor(d.length/win),rms=new Float32Array(n);
+  for(let k=0;k<n;k++){let q=0;for(let j=0;j<win;j++){const x=d[k*win+j];q+=x*x}rms[k]=Math.sqrt(q/win)}
+  const sorted=Array.from(rms).sort((a,b)=>a-b),floor=sorted[Math.floor(n*.15)]||0,thr=Math.max(floor*2.8,.004);
+  const aA=1-Math.exp(-1/(sr*.005)),aR=1-Math.exp(-1/(sr*.08));let g=0,hold=0,peak=0;
+  for(let k=0;k<n;k++){
+    if(rms[k]>thr)hold=10;else if(hold>0)hold--;
+    const t=hold>0?1:.015;
+    for(let j=0;j<win;j++){g+=(t-g)*(t>g?aA:aR);const i=k*win+j;d[i]*=g;const a=Math.abs(d[i]);if(a>peak)peak=a}
+  }
+  const k2=peak>0?Math.min(6,.9/peak):1;for(let i=0;i<d.length;i++)d[i]*=k2;
+  const out=ctx.createBuffer(1,d.length,sr);out.copyToChannel(d,0);return out;
+}
 async function loadVoices(){
   const list=[['English (India)','en-IN'],['Hindi','hi-IN'],['English (US)','en-US']].map(([l,c])=>({label:'Automatic: '+l,lang:c}));
   try{
@@ -283,12 +402,20 @@ async function loadVoices(){
   $('voice').innerHTML=list.map((x,k)=>`<option value="${k}">${x.label}</option>`).join('');
   if(cur&&list[+cur])$('voice').value=cur;
 }
-loadVoices();setTimeout(loadVoices,1500);setTimeout(loadVoices,4000);
+loadVoices();setTimeout(loadVoices,1500);setTimeout(loadVoices,4000);setTimeout(()=>{try{animalUI()}catch(e){}},1600);
 if(hasWebTTS)speechSynthesis.onvoiceschanged=loadVoices;
+function animalUI(){
+  const clean=cleanVoice()||!!nativeFile(),sel=$('animal');
+  [...sel.options].forEach(o=>{o.disabled=!(o.value===''||o.value==='meow'||nativeFile())});
+  if(!nativeFile()&&sel.value&&sel.value!=='meow')sel.value='';
+  $('animalhint').textContent=nativeFile()?'The voice reads your words clearly, then the animal adds its sound.':'Animal speech voices work in the Android app. Meow talk works everywhere.';
+}
+$('animal').onchange=animalUI;
 function modeUI(){
+  $('animalwrap').hidden=$('vmode').value!=='tts';animalUI();
   const m=$('vmode').value;
   $('voicewrap').hidden=m!=='tts';$('recvoice').hidden=m!=='mic';$('voicefilewrap').hidden=m!=='mic';
-  $('vhint').textContent=m==='tts'?'Scene length follows the voice. Choose an en-IN or hi-IN voice for Indian accents.':m==='mic'?'Press Record, then read each line as it appears. The cat opens its mouth to your voice.':'';
+  $('vhint').textContent=m==='tts'?'Scene length follows the voice. Try the 🐱 cat voices for a funny reel, or pick an en-IN or hi-IN voice.':m==='mic'?'Press Record, then read each line as it appears. The cat opens its mouth to your voice.':'';
 }
 $('vmode').onchange=modeUI;modeUI();
 
@@ -296,29 +423,34 @@ $('vmode').onchange=modeUI;modeUI();
 async function play(o={}){
   if(S.stop)S.stop();
   const list=scenes();if(!list.length)return;
-  let mode=o.silent?'none':$('vmode').value;const dur=Math.max(1.5,+$('dur').value||3);
-  if(mode==='tts'&&!ttsAvailable()){mode='none';$('status').textContent='No computer voice found on this device, so this plays without sound. Use “My own voice” or upload a voice file.'}
+  let mode=o.silent?'none':$('vmode').value;const vsel=S.voices[$('voice').value]||S.voices[0]||{lang:'en-IN'},fx=$('animal').value;const dur=Math.max(1.5,+$('dur').value||3);
+  if(mode==='tts'&&!ttsAvailable()&&!cleanVoice()){mode='none';$('status').textContent='No computer voice found on this device, so this plays without sound. Use “My own voice” or upload a voice file.'}
   let est=list.map(s=>mode==='tts'?Math.max(2,s.split(/\s+/).length*.42):dur);
   let i=0,t0=performance.now(),g0=t0,fin=false,ttsEnd=0,speaking=false,pulse=0,an,buf,ael,mel,ctx=o.ctx;
   S.playing=true;S.amp=0;
-  let abufs=null,cur=null;
-  if(mode==='tts'&&nativeFile()){
+  let abufs=null,cur=null,micBuf=null;
+  if(mode==='tts'&&cleanVoice()){
     S.playing=false;
     if(S.preparing){return}
     S.preparing=true;
     try{
       ctx=ctx||S.actx||(S.actx=new AudioContext());await ctx.resume();
-      const v=S.voices[$('voice').value]||S.voices[0]||{lang:'en-IN'};abufs=[];
+      abufs=[];
       for(let k=0;k<list.length;k++){
         $('status').textContent='Preparing voice… '+(k+1)+' of '+list.length;
-        const r=await nativeFile().synthesize({text:list[k],lang:v.lang,voiceName:v.name||'',rate:1});
-        const ab=Uint8Array.from(atob(r.data),c=>c.charCodeAt(0)).buffer;
-        abufs.push(await ctx.decodeAudioData(ab));
+        let b;
+        if(fx==='meow')b=await meowBuffer(list[k]);
+        else{
+          const r=await nativeFile().synthesize({text:list[k],lang:vsel.lang,voiceName:vsel.name||'',rate:1});
+          b=await ctx.decodeAudioData(Uint8Array.from(atob(r.data),c=>c.charCodeAt(0)).buffer);
+          if(fx)b=await applyFx(b,fx);
+        }
+        abufs.push(b);
       }
       mode='ttsfile';est=abufs.map(b=>Math.max(1.8,b.duration+.45));
       $('status').textContent=o.ctx?'Recording…':'Playing preview…';
     }catch(e){
-      abufs=null;$('status').textContent='Couldn’t prepare the clean voice ('+((e&&e.message)||e)+'). Using the basic voice instead.';
+      abufs=null;if(fx==='meow')mode='none';$('status').textContent='Couldn’t prepare the clean voice ('+((e&&e.message)||e)+'). Using the basic voice instead.';
     }finally{S.preparing=false}
     S.playing=true;
   }
@@ -348,10 +480,13 @@ async function play(o={}){
   if(mode==='mic'&&S.voiceUrl&&!o.recordVoice){
     try{
       ctx=ctx||S.actx||(S.actx=new AudioContext());await ctx.resume();
-      ael=new Audio(S.voiceUrl);const src=ctx.createMediaElementSource(ael);
-      an=ctx.createAnalyser();an.fftSize=512;buf=new Uint8Array(an.fftSize);src.connect(an);
-      if(o.dest)src.connect(o.dest);else an.connect(ctx.destination);
-    }catch(e){ael=null;an=null;$('status').textContent='Couldn’t play the voice file: '+e.message}
+      $('status').textContent=$('denoise').checked?'Cleaning your voice…':'Loading your voice…';
+      let vb=await ctx.decodeAudioData(await (await fetch(S.voiceUrl)).arrayBuffer());
+      if($('denoise').checked)vb=await denoiseBuffer(vb,ctx);
+      micBuf=vb;an=ctx.createAnalyser();an.fftSize=512;buf=new Uint8Array(an.fftSize);
+      if(o.dest)an.connect(o.dest);else an.connect(ctx.destination);
+      $('status').textContent=o.ctx?'Recording…':'Playing preview…';
+    }catch(e){micBuf=null;an=null;$('status').textContent='Couldn’t play the voice file: '+e.message}
   }
   const mf=$('music').files[0];
   if(mf&&!o.ctx){mel=new Audio(URL.createObjectURL(mf));mel.loop=true;mel.volume=.35;mel.play().catch(()=>{})}
@@ -365,7 +500,7 @@ async function play(o={}){
   };
   S.stop=()=>{if(o.onAbort)o.onAbort();finish()};
   t0=g0=performance.now();
-  if(ael)ael.play().catch(()=>{});
+  if(micBuf){try{cur=ctx.createBufferSource();cur.buffer=micBuf;cur.connect(an);cur.start()}catch(e){$('status').textContent='Voice problem: '+e.message}}
   try{if(mode==='ttsfile')startBuf(0);else if(mode==='tts')speak(list[0])}catch(e){$('status').textContent='Voice problem: '+e.message}
   const tick0=now=>{
     if(fin)return;
@@ -389,7 +524,7 @@ $('recvoice').onclick=async()=>{
   const st=$('status'),btn=$('recvoice');
   if(!navigator.mediaDevices||!window.MediaRecorder){st.textContent='Microphone recording isn’t available here.';return}
   let ms;
-  try{ms=await navigator.mediaDevices.getUserMedia({audio:true})}
+  try{ms=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}
   catch(e){st.textContent='Microphone blocked. Allow it in the address bar, then try again.';return}
   btn.disabled=true;
   for(let k=3;k>0;k--){st.textContent='Get ready… '+k;await sleep(900)}
@@ -427,11 +562,11 @@ $('rec').onclick=async()=>{
   out.innerHTML='';
   if(!window.MediaRecorder||!cv.captureStream){st.textContent=isNative()?'Video export isn’t available on this device. Update “Android System WebView” and “Google Chrome” in the Play Store, then try again.':'This browser can’t export video. Open the app in Chrome or Edge.';return}
   if(mode==='mic'&&!S.voiceUrl){st.textContent='Record your voice first, then export.';return}
-  if(mode==='tts'&&!ttsAvailable()){st.textContent='No computer voice found on this device. Turn on Google Text-to-Speech in Android Settings, or pick “My own voice”.';return}
+  if(mode==='tts'&&!ttsAvailable()&&!cleanVoice()){st.textContent='No computer voice found on this device. Turn on Google Text-to-Speech in Android Settings, or pick “My own voice”.';return}
   btn.disabled=true;
   try{
     const stream=cv.captureStream(30),mf=$('music').files[0];let ctx,dest;
-    if(mode==='tts'&&!nativeFile()){
+    if(mode==='tts'&&!cleanVoice()){
       const md=navigator.mediaDevices;
       if(md&&md.getDisplayMedia){
         st.textContent='In the popup choose “This tab” and tick “Share tab audio”, so the voice gets recorded.';
@@ -453,7 +588,8 @@ $('rec').onclick=async()=>{
     const types=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4;codecs=avc1.4D401F,mp4a.40.2','video/mp4;codecs=avc1.640028,mp4a.40.2','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
     const mime=types.find(t=>MediaRecorder.isTypeSupported(t))||'';
     const isMp4=mime.includes('mp4');
-    st.textContent=(isMp4?'Recording as H.264 MP4, ready for Instagram. ':(isNative()?'This device can’t make Instagram-ready MP4, so this will be WebM. ':'This browser can’t make Instagram-ready MP4, so this will be WebM. '))+(isNative()?'Keep the app open on this screen.':'Keep this tab open and visible.');
+    const srcNote=mode==='tts'?(cleanVoice()?'Voice: clean, no microphone. ':'Voice: recorded through the microphone, so it may pick up noise. '):mode==='mic'?'Voice: your recording'+($('denoise').checked?' (noise removed). ':'. '):'No voice. ';
+    st.textContent=srcNote+(isMp4?'Recording as H.264 MP4, ready for Instagram. ':(isNative()?'This device can’t make Instagram-ready MP4, so this will be WebM. ':'This browser can’t make Instagram-ready MP4, so this will be WebM. '))+(isNative()?'Keep the app open on this screen.':'Keep this tab open and visible.');
     const rec=mime?new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:6e6,audioBitsPerSecond:128e3}):new MediaRecorder(stream),chunks=[];
     rec.ondataavailable=e=>e.data&&e.data.size&&chunks.push(e.data);
     rec.onerror=e=>{st.textContent='Recording failed: '+(e.error&&e.error.message||'unknown error');btn.disabled=false};
